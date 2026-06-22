@@ -122,7 +122,7 @@ const S = {
   main: { padding: "20px 16px 60px" },
   card: { background: "#FAFAF8", borderRadius: 14, padding: 18, boxShadow: "0 1px 4px rgba(45,41,38,0.07)", marginBottom: 14 },
   cardTitle: { fontSize: 10, fontWeight: 700, color: "#9A9490", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 12 },
-  bigNum: { fontSize: 26, fontWeight: 800, color: "#2D2926", lineHeight: 1 },
+  bigNum: { fontSize: "clamp(18px, 4vw, 26px)", fontWeight: 800, color: "#2D2926", lineHeight: 1 },
   bigNumSub: { fontSize: 11, color: "#9A9490", marginTop: 4 },
   progressWrap: { background: "#EDE8E3", borderRadius: 99, height: 7, overflow: "hidden", marginTop: 8 },
   progressFill: (p, over) => ({ height: "100%", width: `${Math.min(100, p)}%`, background: over ? "#C0392B" : p > 80 ? "#E67E22" : "#5C7A5C", borderRadius: 99, transition: "width 0.5s ease" }),
@@ -200,31 +200,65 @@ function CatDot({ catId }) {
 }
 
 // ─── MODAL GASTO ─────────────────────────────────────────────────────────────
+const gerarRecorrencias = (n, descricao, valor, dataInicio) => {
+  const arr = [];
+  for (let i = 0; i < n; i++) {
+    const d = new Date(dataInicio + "T12:00:00");
+    d.setMonth(d.getMonth() + i);
+    arr.push({
+      descricao: `${descricao} — ${i + 1}/${n}`,
+      valor: valor,
+      data: d.toISOString().split("T")[0],
+    });
+  }
+  return arr;
+};
+
 function ModalGasto({ onClose, onSave, onDelete, initial }) {
   const blank = {
     comodo: "", categoria: "", fornecedor: "Loja", loja: "", descricao: "",
-    valor: "", status: "pendente", meio_pagamento: "pix", parcelas: "",
+    valor: "", status: "pendente", meio_pagamento: "", parcelas: "",
     data: new Date().toISOString().split("T")[0], parcelas_lista: [],
-    responsavel: "victor", presenteador: ""
+    responsavel: "", presenteador: "", recorrencias: "", recorrencias_lista: [],
   };
-  const [form, setForm] = useState(initial || blank);
+  const [form, setForm] = useState(() => ({ ...blank, ...(initial || {}) }));
   const [confirmDel, setConfirmDel] = useState(false);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
-  const ok = form.comodo && form.categoria && form.valor && form.descricao;
+
+  const isPresente = form.responsavel === "presente";
   const showParcelas = form.status === "parcelado" && ["cartao", "boleto"].includes(form.meio_pagamento);
   const isParcelado = form.status === "parcelado" && form.parcelas_lista?.length > 0;
-  const isPresente = form.responsavel === "presente";
   const dateLabel = DATE_LABEL[form.status] || "Data";
+  const isRecorrente = !initial?.id && parseInt(form.recorrencias) >= 2 && form.recorrencias_lista?.length > 0;
 
+  // Valida campos obrigatórios incluindo responsavel e meio_pagamento
+  const ok = form.comodo && form.categoria && form.valor && form.descricao
+    && form.responsavel
+    && (isPresente || form.meio_pagamento);
+
+  // Parcelas do cartão
   const handleParcelasChange = (n) => {
-    set("parcelas", n);
-    if (!n || !form.data) return;
-    const num = parseInt(n);
-    if (isNaN(num) || num < 2) return;
-    const novas = gerarParcelas(num, form.data);
-    const antigas = form.parcelas_lista || [];
-    novas.forEach((p, i) => { if (antigas[i]) p.pago = antigas[i].pago; });
-    set("parcelas_lista", novas);
+    setForm(f => {
+      const num = parseInt(n);
+      if (!n || isNaN(num) || num < 2 || !f.data) return { ...f, parcelas: n };
+      const novas = gerarParcelas(num, f.data);
+      const antigas = f.parcelas_lista || [];
+      novas.forEach((p, i) => { if (antigas[i]) p.pago = antigas[i].pago; });
+      return { ...f, parcelas: n, parcelas_lista: novas };
+    });
+  };
+
+  const handleDataChange = (novaData) => {
+    setForm(f => {
+      const num = parseInt(f.parcelas);
+      if (!isNaN(num) && num >= 2 && f.status === "parcelado") {
+        const novas = gerarParcelas(num, novaData);
+        const antigas = f.parcelas_lista || [];
+        novas.forEach((p, i) => { if (antigas[i]) p.pago = antigas[i].pago; });
+        return { ...f, data: novaData, parcelas_lista: novas };
+      }
+      return { ...f, data: novaData };
+    });
   };
 
   const toggleParcela = (idx) => {
@@ -232,9 +266,55 @@ function ModalGasto({ onClose, onSave, onDelete, initial }) {
     set("parcelas_lista", lista);
   };
 
+  // Recorrências
+  const handleRecorrenciasChange = (n) => {
+    setForm(f => {
+      const num = parseInt(n);
+      if (!n || isNaN(num) || num < 2) return { ...f, recorrencias: n, recorrencias_lista: [] };
+      const novas = gerarRecorrencias(num, f.descricao || "", parseFloat(f.valor) || 0, f.data);
+      const antigas = f.recorrencias_lista || [];
+      novas.forEach((r, i) => { if (antigas[i]) { r.descricao = antigas[i].descricao; r.valor = antigas[i].valor; r.data = antigas[i].data; } });
+      return { ...f, recorrencias: n, recorrencias_lista: novas };
+    });
+  };
+
+  const updateRecorrencia = (idx, campo, valor) => {
+    setForm(f => {
+      const lista = f.recorrencias_lista.map((r, i) => i === idx ? { ...r, [campo]: valor } : r);
+      return { ...f, recorrencias_lista: lista };
+    });
+  };
+
   const pagas = form.parcelas_lista?.filter(p => p.pago).length || 0;
-  const total = form.parcelas_lista?.length || 0;
-  const valorParcela = total > 0 ? parseFloat(form.valor || 0) / total : 0;
+  const totalP = form.parcelas_lista?.length || 0;
+  const valorParcela = totalP > 0 ? parseFloat(form.valor || 0) / totalP : 0;
+
+  const handleSave = () => {
+    if (!ok) return;
+    const base = { ...blank, ...form, valor: parseFloat(form.valor), id: form.id || genId() };
+
+    if (isRecorrente) {
+      // Salva N lançamentos independentes
+      const lançamentos = form.recorrencias_lista.map(r => ({
+        ...base,
+        id: genId(),
+        descricao: r.descricao,
+        valor: parseFloat(r.valor) || base.valor,
+        data: r.data,
+        recorrencias: "", recorrencias_lista: [],
+      }));
+      onSave(lançamentos);
+    } else {
+      onSave(base);
+    }
+  };
+
+  // Duplicar
+  const handleDuplicar = () => {
+    const copia = { ...form, id: undefined, descricao: `${form.descricao} (cópia)` };
+    onClose();
+    onSave({ ...blank, ...copia, valor: parseFloat(copia.valor), id: genId() });
+  };
 
   return (
     <div style={S.overlay} onClick={onClose}>
@@ -255,7 +335,7 @@ function ModalGasto({ onClose, onSave, onDelete, initial }) {
           </select></div>
 
         <div style={S.formRow}><label style={S.label}>Descrição *</label>
-          <input style={S.input} value={form.descricao} placeholder="ex: Entrada marcenaria, Parcela 1/12…" onChange={e => set("descricao", e.target.value)} /></div>
+          <input style={S.input} value={form.descricao} placeholder="ex: Entrada marcenaria" onChange={e => set("descricao", e.target.value)} /></div>
 
         <div style={{ ...S.row2, marginBottom: 14 }}>
           <div><label style={S.label}>Tipo</label>
@@ -267,8 +347,9 @@ function ModalGasto({ onClose, onSave, onDelete, initial }) {
         </div>
 
         <div style={{ ...S.row2, marginBottom: 14 }}>
-          <div><label style={S.label}>Responsável pelo pagamento</label>
+          <div><label style={S.label}>Responsável * </label>
             <select style={S.select} value={form.responsavel} onChange={e => set("responsavel", e.target.value)}>
+              <option value="">Selecione…</option>
               {RESPONSAVEIS.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
             </select></div>
           {isPresente && (
@@ -284,7 +365,7 @@ function ModalGasto({ onClose, onSave, onDelete, initial }) {
         )}
 
         <div style={{ ...S.row2, marginBottom: 14 }}>
-          <div><label style={S.label}>Valor total (R$) *</label>
+          <div><label style={S.label}>Valor (R$) *</label>
             <CurrencyInput value={form.valor} onChange={v => set("valor", v)} /></div>
           <div><label style={S.label}>Status</label>
             <select style={S.select} value={form.status} onChange={e => set("status", e.target.value)}>
@@ -294,20 +375,22 @@ function ModalGasto({ onClose, onSave, onDelete, initial }) {
 
         {!isPresente && (
           <div style={{ ...S.row2, marginBottom: 14 }}>
-            <div><label style={S.label}>Meio de pagamento</label>
+            <div><label style={S.label}>Meio de pagamento *</label>
               <select style={S.select} value={form.meio_pagamento} onChange={e => set("meio_pagamento", e.target.value)}>
+                <option value="">Selecione…</option>
                 {MEIOS_PAGAMENTO.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
               </select></div>
             <div><label style={S.label}>{dateLabel}</label>
-              <input style={S.input} type="date" value={form.data} onChange={e => set("data", e.target.value)} /></div>
+              <input style={S.input} type="date" value={form.data} onChange={e => handleDataChange(e.target.value)} /></div>
           </div>
         )}
 
         {isPresente && (
           <div style={S.formRow}><label style={S.label}>Data</label>
-            <input style={S.input} type="date" value={form.data} onChange={e => set("data", e.target.value)} /></div>
+            <input style={S.input} type="date" value={form.data} onChange={e => handleDataChange(e.target.value)} /></div>
         )}
 
+        {/* Parcelas cartão/boleto */}
         {showParcelas && !isPresente && (
           <div style={S.formRow}><label style={S.label}>Nº de parcelas</label>
             <input style={S.input} type="number" min="2" max="60" value={form.parcelas} placeholder="ex: 12" onChange={e => handleParcelasChange(e.target.value)} /></div>
@@ -315,16 +398,16 @@ function ModalGasto({ onClose, onSave, onDelete, initial }) {
 
         {form.status === "parcelado" && !["cartao", "boleto"].includes(form.meio_pagamento) && !isPresente && (
           <div style={{ background: "#FDF3E7", borderRadius: 8, padding: "10px 12px", marginBottom: 14, fontSize: 12, color: "#C8843A" }}>
-            💡 Para parcelamento via Pix ou Transferência, lance um pagamento por mês separado.
+            💡 Para parcelamento via Pix ou Transferência, use a Recorrência abaixo.
           </div>
         )}
 
         {isParcelado && !isPresente && (
           <div style={{ marginBottom: 14 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-              <label style={S.label}>Parcelas</label>
-              <span style={{ fontSize: 12, fontWeight: 700, color: pagas === total ? "#5C7A5C" : "#4A6FA5" }}>
-                {pagas}/{total} pagas · {fmt(valorParcela * pagas)} pago
+              <label style={S.label}>Parcelas do cartão</label>
+              <span style={{ fontSize: 12, fontWeight: 700, color: pagas === totalP ? "#5C7A5C" : "#4A6FA5" }}>
+                {pagas}/{totalP} pagas · {fmt(valorParcela * pagas)} pago
               </span>
             </div>
             <div style={{ background: "#F0EBE6", borderRadius: 10, overflow: "hidden" }}>
@@ -334,7 +417,7 @@ function ModalGasto({ onClose, onSave, onDelete, initial }) {
                     {p.pago && <span style={{ color: "white", fontSize: 13, fontWeight: 800, lineHeight: 1 }}>✓</span>}
                   </div>
                   <div style={{ flex: 1 }}>
-                    <span style={{ fontSize: 13, fontWeight: 600, color: p.pago ? "#5C7A5C" : "#2D2926" }}>Parcela {p.num}/{total}</span>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: p.pago ? "#5C7A5C" : "#2D2926" }}>Parcela {p.num}/{totalP}</span>
                     <span style={{ fontSize: 11, color: "#9A9490", marginLeft: 8 }}>{fmtDateFull(p.data)}</span>
                   </div>
                   <span style={{ fontSize: 13, fontWeight: 700, color: p.pago ? "#5C7A5C" : "#2D2926" }}>{fmt(valorParcela)}</span>
@@ -344,9 +427,51 @@ function ModalGasto({ onClose, onSave, onDelete, initial }) {
           </div>
         )}
 
-        <button style={{ ...S.btnPrimary, opacity: ok ? 1 : 0.5 }} onClick={() => ok && onSave({ ...form, valor: parseFloat(form.valor), id: form.id || genId() })}>
-          {initial?.id ? "Salvar alterações" : "Lançar gasto"}
+        {/* Recorrência — só em novos lançamentos */}
+        {!initial?.id && (
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ height: 1, background: "#EDE8E3", margin: "6px 0 14px" }} />
+            <label style={S.label}>🔁 Recorrência (opcional)</label>
+            <input style={S.input} type="number" min="2" max="36" value={form.recorrencias}
+              placeholder="Nº de repetições (ex: 6 para 6 meses)"
+              onChange={e => handleRecorrenciasChange(e.target.value)} />
+            {isRecorrente && (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ fontSize: 11, color: "#9A9490", marginBottom: 8 }}>
+                  Ajuste descrição, valor ou data de cada recorrência se necessário:
+                </div>
+                <div style={{ background: "#F0EBE6", borderRadius: 10, overflow: "hidden" }}>
+                  {form.recorrencias_lista.map((r, i) => (
+                    <div key={i} style={{ padding: "12px 14px", borderBottom: i < form.recorrencias_lista.length - 1 ? "1px solid #E8E2DC" : "none" }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "#9A9490", marginBottom: 8 }}>
+                        {i + 1}/{form.recorrencias_lista.length}
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        <input style={{ ...S.input, fontSize: 12, padding: "7px 10px" }}
+                          value={r.descricao}
+                          onChange={e => updateRecorrencia(i, "descricao", e.target.value)} />
+                        <div style={S.row2}>
+                          <CurrencyInput value={r.valor} onChange={v => updateRecorrencia(i, "valor", v)} />
+                          <input style={{ ...S.input, fontSize: 12, padding: "7px 10px" }} type="date"
+                            value={r.data} onChange={e => updateRecorrencia(i, "data", e.target.value)} />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        <button style={{ ...S.btnPrimary, opacity: ok ? 1 : 0.5 }} onClick={handleSave}>
+          {initial?.id ? "Salvar alterações" : isRecorrente ? `Lançar ${form.recorrencias_lista.length} lançamentos` : "Lançar gasto"}
         </button>
+        {initial?.id && (
+          <button style={{ ...S.btnPrimary, background: "#4A6FA5", marginTop: 8 }} onClick={handleDuplicar}>
+            📋 Duplicar lançamento
+          </button>
+        )}
         {initial?.id && <button style={S.btnDangerFull} onClick={() => setConfirmDel(true)}>Excluir lançamento</button>}
         <button style={S.btnSecondary} onClick={onClose}>Cancelar</button>
       </div>
@@ -405,9 +530,19 @@ function Dashboard({ data }) {
   const totalPago = data.gastos.reduce((s, g) => s + valorPago(g), 0);
   const totalPendente = data.gastos.reduce((s, g) => s + valorPendente(g), 0);
   const totalPresentes = data.gastos.filter(g => g.responsavel === "presente").reduce((s, g) => s + g.valor, 0);
-  const totalVictor = data.gastos.filter(g => g.responsavel === "victor").reduce((s, g) => s + g.valor, 0);
-  const totalCarol = data.gastos.filter(g => g.responsavel === "carol").reduce((s, g) => s + g.valor, 0);
   const over = totalGasto > totalOrc && totalOrc > 0;
+
+  // Por responsável — total, pago e pendente
+  const statsVictor = {
+    total: data.gastos.filter(g => g.responsavel === "victor").reduce((s, g) => s + g.valor, 0),
+    pago: data.gastos.filter(g => g.responsavel === "victor").reduce((s, g) => s + valorPago(g), 0),
+    pendente: data.gastos.filter(g => g.responsavel === "victor").reduce((s, g) => s + valorPendente(g), 0),
+  };
+  const statsCarol = {
+    total: data.gastos.filter(g => g.responsavel === "carol").reduce((s, g) => s + g.valor, 0),
+    pago: data.gastos.filter(g => g.responsavel === "carol").reduce((s, g) => s + valorPago(g), 0),
+    pendente: data.gastos.filter(g => g.responsavel === "carol").reduce((s, g) => s + valorPendente(g), 0),
+  };
 
   const comodoStats = COMODOS.map(c => ({
     ...c,
@@ -426,29 +561,37 @@ function Dashboard({ data }) {
 
   return (
     <div>
-      <div style={S.row2}>
-        <div style={{ ...S.card, borderTop: "3px solid #C8A882", marginBottom: 0 }}>
+      <div style={{ ...S.row2, alignItems: "stretch" }}>
+        <div style={{ ...S.card, borderTop: "3px solid #C8A882", marginBottom: 0, display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
           <div style={S.cardTitle}>Orçamento</div>
-          <div style={S.bigNum}>{fmt(totalOrc)}</div>
-          <div style={S.bigNumSub}>total previsto</div>
+          <div>
+            <div style={S.bigNum}>{fmt(totalOrc)}</div>
+            <div style={S.bigNumSub}>total previsto</div>
+          </div>
         </div>
-        <div style={{ ...S.card, borderTop: `3px solid ${over ? "#C0392B" : "#C8A882"}`, marginBottom: 0 }}>
+        <div style={{ ...S.card, borderTop: `3px solid ${over ? "#C0392B" : "#C8A882"}`, marginBottom: 0, display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
           <div style={S.cardTitle}>Comprometido</div>
-          <div style={{ ...S.bigNum, color: over ? "#C0392B" : "#2D2926" }}>{fmt(totalGasto)}</div>
-          <div style={S.bigNumSub}>{pct(totalGasto, totalOrc).toFixed(0)}% do orçamento</div>
+          <div>
+            <div style={{ ...S.bigNum, color: over ? "#C0392B" : "#2D2926" }}>{fmt(totalGasto)}</div>
+            <div style={S.bigNumSub}>{pct(totalGasto, totalOrc).toFixed(0)}% do orçamento</div>
+          </div>
         </div>
       </div>
       <div style={{ height: 12 }} />
-      <div style={S.row2}>
-        <div style={{ ...S.card, borderTop: "3px solid #5C7A5C", marginBottom: 0 }}>
+      <div style={{ ...S.row2, alignItems: "stretch" }}>
+        <div style={{ ...S.card, borderTop: "3px solid #5C7A5C", marginBottom: 0, display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
           <div style={S.cardTitle}>Já pago</div>
-          <div style={{ ...S.bigNum, fontSize: 20, color: "#5C7A5C" }}>{fmt(totalPago)}</div>
-          <div style={S.bigNumSub}>à vista + parcelas pagas</div>
+          <div>
+            <div style={{ ...S.bigNum, color: "#5C7A5C" }}>{fmt(totalPago)}</div>
+            <div style={S.bigNumSub}>à vista + parcelas pagas</div>
+          </div>
         </div>
-        <div style={{ ...S.card, borderTop: "3px solid #C8843A", marginBottom: 0 }}>
+        <div style={{ ...S.card, borderTop: "3px solid #C8843A", marginBottom: 0, display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
           <div style={S.cardTitle}>A pagar</div>
-          <div style={{ ...S.bigNum, fontSize: 20, color: "#C8843A" }}>{fmt(totalPendente)}</div>
-          <div style={S.bigNumSub}>pendente + parcelas restantes</div>
+          <div>
+            <div style={{ ...S.bigNum, color: "#C8843A" }}>{fmt(totalPendente)}</div>
+            <div style={S.bigNumSub}>pendente + parcelas restantes</div>
+          </div>
         </div>
       </div>
       <div style={{ height: 16 }} />
@@ -465,26 +608,40 @@ function Dashboard({ data }) {
         </div>
       )}
 
-      {(totalVictor > 0 || totalCarol > 0 || totalPresentes > 0) && (
+      {(statsVictor.total > 0 || statsCarol.total > 0 || totalPresentes > 0) && (
         <div style={S.card}>
           <div style={S.cardTitle}>Por responsável</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {totalVictor > 0 && (
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontSize: 13, fontWeight: 600, color: "#4A6FA5" }}>👤 Victor</span>
-                <span style={{ fontSize: 14, fontWeight: 800 }}>{fmt(totalVictor)}</span>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {statsVictor.total > 0 && (
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: "#4A6FA5" }}>👤 Victor</span>
+                  <span style={{ fontSize: 14, fontWeight: 800 }}>{fmt(statsVictor.total)}</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#9A9490" }}>
+                  <span style={{ color: "#5C7A5C" }}>✓ {fmt(statsVictor.pago)} pago</span>
+                  {statsVictor.pendente > 0 && <span style={{ color: "#C8843A" }}>⏳ {fmt(statsVictor.pendente)} pendente</span>}
+                </div>
               </div>
             )}
-            {totalCarol > 0 && (
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontSize: 13, fontWeight: 600, color: "#9B6FA5" }}>👤 Carol</span>
-                <span style={{ fontSize: 14, fontWeight: 800 }}>{fmt(totalCarol)}</span>
+            {statsCarol.total > 0 && (
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: "#9B6FA5" }}>👤 Carol</span>
+                  <span style={{ fontSize: 14, fontWeight: 800 }}>{fmt(statsCarol.total)}</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "#9A9490" }}>
+                  <span style={{ color: "#5C7A5C" }}>✓ {fmt(statsCarol.pago)} pago</span>
+                  {statsCarol.pendente > 0 && <span style={{ color: "#C8843A" }}>⏳ {fmt(statsCarol.pendente)} pendente</span>}
+                </div>
               </div>
             )}
             {totalPresentes > 0 && (
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: 8, borderTop: "1px solid #EDE8E3" }}>
-                <span style={{ fontSize: 13, fontWeight: 600, color: "#5C7A5C" }}>🎁 Presentes</span>
-                <span style={{ fontSize: 14, fontWeight: 800, color: "#5C7A5C" }}>{fmt(totalPresentes)}</span>
+              <div style={{ paddingTop: 10, borderTop: "1px solid #EDE8E3" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: "#5C7A5C" }}>🎁 Presentes</span>
+                  <span style={{ fontSize: 14, fontWeight: 800, color: "#5C7A5C" }}>{fmt(totalPresentes)}</span>
+                </div>
               </div>
             )}
           </div>
@@ -592,7 +749,15 @@ function AbaGastos({ data, setData, gastoInicial, onClearGastoInicial }) {
     setTimeout(() => { setModal({ ...gastoInicial, _prefill: true }); onClearGastoInicial(); }, 50);
   }
 
-  const save = (item) => { setData(d => ({ ...d, gastos: d.gastos.find(g => g.id === item.id) ? d.gastos.map(g => g.id === item.id ? item : g) : [...d.gastos, item] })); setModal(null); };
+  const save = (item) => {
+    if (Array.isArray(item)) {
+      // Recorrência: salva múltiplos lançamentos de uma vez
+      setData(d => ({ ...d, gastos: [...d.gastos, ...item] }));
+    } else {
+      setData(d => ({ ...d, gastos: d.gastos.find(g => g.id === item.id) ? d.gastos.map(g => g.id === item.id ? item : g) : [...d.gastos, item] }));
+    }
+    setModal(null);
+  };
   const del = (id) => { setData(d => ({ ...d, gastos: d.gastos.filter(g => g.id !== id) })); setModal(null); };
 
   const lista = data.gastos.filter(g => {
