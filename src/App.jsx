@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, onSnapshot, setDoc } from "firebase/firestore";
 
@@ -78,6 +78,32 @@ const pct = (v, t) => (t > 0 ? Math.min(100, (v / t) * 100) : 0);
 const genId = () => Math.random().toString(36).slice(2, 9);
 const fmtDateFull = (d) => d ? new Date(d + "T12:00:00").toLocaleDateString("pt-BR") : "—";
 
+const MESES_ABREV = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+const MESES_FULL = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+const monthKeyOf = (dateStr) => (dateStr ? dateStr.slice(0, 7) : null); // "YYYY-MM"
+const currentMonthKey = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; };
+const mesAbrev = (key) => MESES_ABREV[parseInt(key.slice(5, 7), 10) - 1];
+const mesFullLabel = (key) => `${MESES_FULL[parseInt(key.slice(5, 7), 10) - 1]} ${key.slice(0, 4)}`;
+
+// Gera todas as chaves de mês entre minKey e maxKey (inclusive), incluindo meses vazios
+const rangeMeses = (minKey, maxKey) => {
+  const arr = [];
+  let y = parseInt(minKey.slice(0, 4), 10), m = parseInt(minKey.slice(5, 7), 10);
+  const yf = parseInt(maxKey.slice(0, 4), 10), mf = parseInt(maxKey.slice(5, 7), 10);
+  while (y < yf || (y === yf && m <= mf)) {
+    arr.push(`${y}-${String(m).padStart(2, "0")}`);
+    m++; if (m > 12) { m = 1; y++; }
+  }
+  return arr;
+};
+
+// Valor abreviado tipo "R$ 4,7k"
+const fmtCompact = (v) => {
+  if (!v) return "R$ 0";
+  if (v >= 1000) return `R$ ${(v / 1000).toFixed(1).replace(".", ",")}k`;
+  return `R$ ${Math.round(v)}`;
+};
+
 const gerarParcelas = (n, dataInicio) => {
   const arr = [];
   for (let i = 0; i < n; i++) {
@@ -134,7 +160,7 @@ const S = {
   formRow: { marginBottom: 14 },
   overlay: { position: "fixed", inset: 0, background: "rgba(45,41,38,0.5)", zIndex: 200, display: "flex", alignItems: "flex-end", justifyContent: "center" },
   modal: { background: "#FAFAF8", borderRadius: "20px 20px 0 0", padding: "24px 20px 36px", width: "100%", maxHeight: "90vh", overflowY: "auto" },
-  modalHandle: { width: 40, height: 4, background: "#DDD8D3", borderRadius: 99, margin: "0 auto 20px" },
+  modalHandle: { width: 40, height: 4, background: "#DDD8D3", borderRadius: 99, margin: "0 auto 20px", cursor: "pointer" },
   modalTitle: { fontSize: 16, fontWeight: 800, marginBottom: 20, color: "#2D2926" },
   btnPrimary: { background: "#2D2926", color: "#F5F0EB", border: "none", borderRadius: 10, padding: "13px 20px", fontSize: 14, fontWeight: 700, cursor: "pointer", width: "100%", marginTop: 8 },
   btnSecondary: { background: "transparent", color: "#7A7470", border: "1.5px solid #DDD8D3", borderRadius: 10, padding: "12px 20px", fontSize: 14, fontWeight: 500, cursor: "pointer", width: "100%", marginTop: 8 },
@@ -155,11 +181,20 @@ function CurrencyInput({ value, onChange, placeholder = "0,00" }) {
   return <input style={S.input} inputMode="numeric" value={display} placeholder={placeholder} onChange={handleChange} />;
 }
 
+// Barrinha do topo do modal — fecha ao tocar, com área de toque ampliada
+function ModalHandle({ onClose }) {
+  return (
+    <div onClick={onClose} style={{ margin: "-8px auto 12px", padding: "10px 24px", width: "fit-content", cursor: "pointer" }}>
+      <div style={{ width: 40, height: 4, background: "#DDD8D3", borderRadius: 99 }} />
+    </div>
+  );
+}
+
 function ConfirmModal({ msg, onConfirm, onCancel }) {
   return (
     <div style={S.overlay} onClick={onCancel}>
       <div style={{ ...S.modal, padding: "28px 20px 32px" }} onClick={e => e.stopPropagation()}>
-        <div style={S.modalHandle} />
+        <ModalHandle onClose={onCancel} />
         <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 8 }}>Confirmar exclusão</div>
         <div style={{ fontSize: 13, color: "#7A7470", marginBottom: 20 }}>{msg}</div>
         <button style={S.btnDangerFull} onClick={onConfirm}>Sim, excluir</button>
@@ -319,7 +354,7 @@ function ModalGasto({ onClose, onSave, onDelete, initial }) {
   return (
     <div style={S.overlay} onClick={onClose}>
       <div style={S.modal} onClick={e => e.stopPropagation()}>
-        <div style={S.modalHandle} />
+        <ModalHandle onClose={onClose} />
         <div style={S.modalTitle}>{initial?.id ? "✏️ Editar lançamento" : "➕ Novo lançamento"}</div>
 
         <div style={S.formRow}><label style={S.label}>Cômodo *</label>
@@ -491,7 +526,7 @@ function ModalOrcamento({ onClose, onSave, onDelete, initial }) {
   return (
     <div style={S.overlay} onClick={onClose}>
       <div style={S.modal} onClick={e => e.stopPropagation()}>
-        <div style={S.modalHandle} />
+        <ModalHandle onClose={onClose} />
         <div style={S.modalTitle}>{initial?.id ? "✏️ Editar orçamento" : "📋 Novo orçamento previsto"}</div>
         <div style={S.formRow}><label style={S.label}>Cômodo *</label>
           <select style={S.select} value={form.comodo} onChange={e => set("comodo", e.target.value)}>
@@ -523,8 +558,175 @@ function ModalOrcamento({ onClose, onSave, onDelete, initial }) {
   );
 }
 
+// ─── MODAL FATURA (extrato do mês) ───────────────────────────────────────────
+function ModalFatura({ monthKey, mesData, onClose, onSelectGasto }) {
+  return (
+    <div style={S.overlay} onClick={onClose}>
+      <div style={S.modal} onClick={e => e.stopPropagation()}>
+        <ModalHandle onClose={onClose} />
+        <div style={{ ...S.modalTitle, display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+          <span>📅 {mesFullLabel(monthKey)}</span>
+          <span>{fmt(mesData.total)}</span>
+        </div>
+        <div style={{ background: "#F0EBE6", borderRadius: 10, overflow: "hidden", marginBottom: 16 }}>
+          {mesData.items.map((it, i) => {
+            const resp = RESPONSAVEIS.find(r => r.id === it.gasto.responsavel);
+            const meio = MEIOS_PAGAMENTO.find(m => m.id === it.gasto.meio_pagamento);
+            return (
+              <div key={i} onClick={() => onSelectGasto(it.gasto)} style={{ padding: "12px 14px", borderBottom: i < mesData.items.length - 1 ? "1px solid #E8E2DC" : "none", cursor: "pointer" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, flex: 1 }}>
+                    {it.gasto.descricao}
+                    {it.parcelaInfo && <span style={{ fontWeight: 500, color: "#9A9490" }}> · parcela {it.parcelaInfo.num}/{it.parcelaInfo.total}</span>}
+                  </div>
+                  <span style={{ fontSize: 14, fontWeight: 800, flexShrink: 0 }}>{fmt(it.valor)}</span>
+                </div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginTop: 6 }}>
+                  <StatusBadge status={it.gasto.status} />
+                  {resp && <span style={{ fontSize: 11, fontWeight: 700, background: resp.bg, color: resp.color, borderRadius: 99, padding: "2px 9px" }}>{resp.label}{it.gasto.responsavel === "presente" && it.gasto.presenteador ? ` · ${it.gasto.presenteador}` : ""}</span>}
+                  {meio && it.gasto.responsavel !== "presente" && <span style={{ fontSize: 11, color: "#7A9490", background: "#FAFAF8", borderRadius: 99, padding: "2px 8px" }}>{meio.label}</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 4px" }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: "#9A9490", letterSpacing: "0.05em" }}>TOTAL DO MÊS</span>
+          <span style={{ fontWeight: 800, fontSize: 17 }}>{fmt(mesData.total)}</span>
+        </div>
+        <button style={S.btnSecondary} onClick={onClose}>Fechar</button>
+      </div>
+    </div>
+  );
+}
+
+// ─── CARROSSEL DE MESES ──────────────────────────────────────────────────────
+const arrowStyle = (disabled) => ({ background: "none", border: "none", fontSize: 16, color: disabled ? "#E0DBD6" : "#7A7470", cursor: disabled ? "default" : "pointer", padding: "8px 4px", flexShrink: 0, lineHeight: 1 });
+
+function GastosPorMes({ data, setData }) {
+  const [centerKey, setCenterKey] = useState(currentMonthKey);
+  const [faturaKey, setFaturaKey] = useState(null);
+  const [editGasto, setEditGasto] = useState(null);
+  const touchX = useRef(null);
+
+  // Agrega valores por mês. Parcelas contam individualmente; presentes não entram.
+  const mesesData = useMemo(() => {
+    const map = {};
+    const add = (key, gasto, valor, parcelaInfo) => {
+      if (!key) return;
+      if (!map[key]) map[key] = { total: 0, items: [] };
+      map[key].total += valor;
+      map[key].items.push({ gasto, valor, parcelaInfo });
+    };
+    data.gastos.forEach(g => {
+      if (g.responsavel === "presente") return;
+      if (g.status === "parcelado" && g.parcelas_lista?.length) {
+        const vParc = g.valor / g.parcelas_lista.length;
+        g.parcelas_lista.forEach(p => add(monthKeyOf(p.data), g, vParc, { num: p.num, total: g.parcelas_lista.length }));
+      } else {
+        add(monthKeyOf(g.data), g, g.valor, null);
+      }
+    });
+    return map;
+  }, [data]);
+
+  const range = useMemo(() => {
+    const keys = Object.keys(mesesData);
+    if (keys.length === 0) return [];
+    keys.push(currentMonthKey()); // garante o mês atual no range para poder centralizar
+    keys.sort();
+    return rangeMeses(keys[0], keys[keys.length - 1]);
+  }, [mesesData]);
+
+  if (range.length === 0) return null;
+
+  const maxVal = Math.max(...range.map(k => mesesData[k]?.total || 0), 1);
+  const curKey = currentMonthKey();
+
+  let centerIdx = range.indexOf(centerKey);
+  if (centerIdx === -1) centerIdx = range.indexOf(curKey);
+  if (centerIdx === -1) centerIdx = range.length - 1;
+
+  const go = (dir) => {
+    const ni = centerIdx + dir;
+    if (ni >= 0 && ni < range.length) setCenterKey(range[ni]);
+  };
+
+  const onTouchStart = (e) => { touchX.current = e.touches[0].clientX; };
+  const onTouchEnd = (e) => {
+    if (touchX.current == null) return;
+    const dx = e.changedTouches[0].clientX - touchX.current;
+    if (Math.abs(dx) > 40) go(dx < 0 ? 1 : -1);
+    touchX.current = null;
+  };
+
+  const barColor = (key, isCenter) => {
+    const isPast = key < curKey;
+    if (isCenter) return isPast ? "#7A7470" : "#2D2926";
+    return isPast ? "#DAD5D0" : "#D8CBB4";
+  };
+
+  const handleBar = (key) => {
+    if (!key) return;
+    if (mesesData[key]?.items?.length) setFaturaKey(key);
+    else setCenterKey(key);
+  };
+
+  const saveGasto = (item) => {
+    setData(d => ({ ...d, gastos: d.gastos.find(g => g.id === item.id) ? d.gastos.map(g => g.id === item.id ? item : g) : [...d.gastos, item] }));
+    setEditGasto(null);
+  };
+  const delGasto = (id) => { setData(d => ({ ...d, gastos: d.gastos.filter(g => g.id !== id) })); setEditGasto(null); };
+
+  const slots = [centerIdx - 1, centerIdx, centerIdx + 1];
+  const MAXBAR = 96;
+
+  return (
+    <div style={S.card}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <div style={{ ...S.cardTitle, marginBottom: 0 }}>Gastos por mês</div>
+        {range[centerIdx] !== curKey && range.includes(curKey) && (
+          <button onClick={() => setCenterKey(curKey)} style={{ background: "#F0EBE6", border: "none", borderRadius: 99, padding: "4px 12px", fontSize: 11, fontWeight: 700, color: "#7A6A50", cursor: "pointer" }}>
+            ← Voltar ao mês atual
+          </button>
+        )}
+      </div>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 2 }}>
+        <button onClick={() => go(-1)} disabled={centerIdx <= 0} style={arrowStyle(centerIdx <= 0)}>◀</button>
+        <div onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} style={{ flex: 1, display: "flex", alignItems: "flex-end", justifyContent: "space-around", gap: 6, touchAction: "pan-y" }}>
+          {slots.map((idx, si) => {
+            const key = range[idx];
+            const isCenter = si === 1;
+            if (!key) return <div key={si} style={{ flex: 1 }} />;
+            const total = mesesData[key]?.total || 0;
+            const h = total > 0 ? Math.max(6, (total / maxVal) * MAXBAR) : 4;
+            return (
+              <div key={si} onClick={() => handleBar(key)} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", cursor: "pointer" }}>
+                <div style={{ height: MAXBAR, display: "flex", alignItems: "flex-end", width: "100%", justifyContent: "center" }}>
+                  <div style={{ width: isCenter ? "72%" : "54%", height: h, background: barColor(key, isCenter), borderRadius: "6px 6px 0 0", transition: "height 0.3s ease, background 0.2s", opacity: total > 0 ? 1 : 0.5 }} />
+                </div>
+                <div style={{ marginTop: 8, fontSize: isCenter ? 13 : 12, fontWeight: isCenter ? 800 : 600, color: isCenter ? "#2D2926" : "#9A9490" }}>{mesAbrev(key)}</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: isCenter ? "#2D2926" : "#B0A9A2", marginTop: 2 }}>{fmtCompact(total)}</div>
+              </div>
+            );
+          })}
+        </div>
+        <button onClick={() => go(1)} disabled={centerIdx >= range.length - 1} style={arrowStyle(centerIdx >= range.length - 1)}>▶</button>
+      </div>
+      {faturaKey && mesesData[faturaKey] && (
+        <ModalFatura monthKey={faturaKey} mesData={mesesData[faturaKey]}
+          onClose={() => setFaturaKey(null)}
+          onSelectGasto={(g) => { setFaturaKey(null); setEditGasto(g); }} />
+      )}
+      {editGasto && (
+        <ModalGasto initial={editGasto} onClose={() => setEditGasto(null)} onSave={saveGasto} onDelete={delGasto} />
+      )}
+    </div>
+  );
+}
+
 // ─── DASHBOARD ───────────────────────────────────────────────────────────────
-function Dashboard({ data }) {
+function Dashboard({ data, setData }) {
   const totalOrc = data.orcamentos.reduce((s, o) => s + o.valor, 0);
   const totalGasto = data.gastos.filter(g => g.responsavel !== "presente").reduce((s, g) => s + g.valor, 0);
   const totalPago = data.gastos.reduce((s, g) => s + valorPago(g), 0);
@@ -647,6 +849,8 @@ function Dashboard({ data }) {
           </div>
         </div>
       )}
+
+      <GastosPorMes data={data} setData={setData} />
 
       {comodoStats.length > 0 && (
         <>
@@ -825,6 +1029,7 @@ function AbaGastos({ data, setData, gastoInicial, onClearGastoInicial }) {
                   <StatusBadge status={g.status} />
                   {resp && <span style={{ fontSize: 11, fontWeight: 700, background: resp.bg, color: resp.color, borderRadius: 99, padding: "2px 9px" }}>{resp.label}{g.responsavel === "presente" && g.presenteador ? ` · ${g.presenteador}` : ""}</span>}
                   {meio && g.responsavel !== "presente" && <span style={{ fontSize: 11, color: "#7A9490", background: "#F0EBE6", borderRadius: 99, padding: "2px 8px" }}>{meio.label}</span>}
+                  {g.data && <span style={{ fontSize: 11, color: "#7A7470", background: "#F0EBE6", borderRadius: 99, padding: "2px 8px" }}>{fmtDateFull(g.data)}</span>}
                   {isParcelado && <span style={{ fontSize: 11, fontWeight: 700, color: pagas === totalP ? "#5C7A5C" : "#4A6FA5" }}>{pagas}/{totalP} pagas</span>}
                   {g.loja && g.loja !== "—" && <span style={{ fontSize: 11, color: "#B0A9A0" }}>· {g.loja}</span>}
                 </div>
@@ -985,7 +1190,7 @@ export default function App() {
             Conectando ao banco de dados…
           </div>
         )}
-        {synced && aba === "dashboard" && <Dashboard data={data} />}
+        {synced && aba === "dashboard" && <Dashboard data={data} setData={setData} />}
         {synced && aba === "orcamento" && <AbaOrcamento data={data} setData={setData} onLancarGasto={handleLancarGasto} />}
         {synced && aba === "gastos" && <AbaGastos data={data} setData={setData} gastoInicial={gastoInicial} onClearGastoInicial={() => setGastoInicial(null)} />}
         {synced && aba === "comparativo" && <AbaComparativo data={data} />}
